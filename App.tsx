@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   FlatList,
+  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -11,14 +12,18 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import {
+  SafeAreaProvider,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
 
 import { Reminder, deleteReminder, getReminders, initDb, insertReminder } from './lib/db';
 import {
   androidChannelSetup,
+  cancelNotification,
   computeNextDueDate,
   requestNotificationPermissions,
-  resyncReminder,
-  scheduleOneShot,
+  scheduleReminderNotifications,
 } from './lib/notifications';
 
 function startOfDay(date: Date): Date {
@@ -27,15 +32,43 @@ function startOfDay(date: Date): Date {
   return d;
 }
 
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, {
+function defaultNotificationTime(): Date {
+  const d = new Date();
+  d.setHours(9, 0, 0, 0);
+  return d;
+}
+
+function combineDateAndTime(date: Date, time: Date): Date {
+  const combined = new Date(date);
+  combined.setHours(time.getHours(), time.getMinutes(), 0, 0);
+  return combined;
+}
+
+function formatDateTime(date: Date): string {
+  return date.toLocaleDateString(undefined, {
     weekday: 'short',
     month: 'short',
     day: 'numeric',
+  }) + ' · ' + date.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
   });
 }
 
+function formatTime(date: Date): string {
+  return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
 export default function App() {
+  return (
+    <SafeAreaProvider>
+      <ReminderApp />
+    </SafeAreaProvider>
+  );
+}
+
+function ReminderApp() {
+  const insets = useSafeAreaInsets();
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [ready, setReady] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
@@ -43,14 +76,11 @@ export default function App() {
   const [title, setTitle] = useState('');
   const [startDate, setStartDate] = useState(startOfDay(new Date()));
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [notificationTime, setNotificationTime] = useState(defaultNotificationTime());
+  const [showTimePicker, setShowTimePicker] = useState(false);
   const [intervalDays, setIntervalDays] = useState('7');
 
   const loadReminders = useCallback(async () => {
-    const now = new Date();
-    const rows = await getReminders();
-    for (const reminder of rows) {
-      await resyncReminder(reminder, now);
-    }
     setReminders(await getReminders());
   }, []);
 
@@ -67,6 +97,7 @@ export default function App() {
   function resetForm() {
     setTitle('');
     setStartDate(startOfDay(new Date()));
+    setNotificationTime(defaultNotificationTime());
     setIntervalDays('7');
   }
 
@@ -74,16 +105,21 @@ export default function App() {
     const interval = parseInt(intervalDays, 10);
     if (!title.trim() || !Number.isFinite(interval) || interval < 1) return;
 
+    const anchor = combineDateAndTime(startDate, notificationTime);
     const now = new Date();
-    const nextDueDate = computeNextDueDate(startDate, interval, now);
-    const notificationId = await scheduleOneShot(title.trim(), nextDueDate);
+    const firstDueDate = computeNextDueDate(anchor, interval, now);
+    const { notificationId, repeatingNotificationId } = await scheduleReminderNotifications(
+      title.trim(),
+      firstDueDate,
+      interval
+    );
 
     await insertReminder(
       title.trim(),
-      startDate.toISOString(),
+      anchor.toISOString(),
       interval,
-      nextDueDate.toISOString(),
-      notificationId
+      notificationId,
+      repeatingNotificationId
     );
 
     resetForm();
@@ -92,6 +128,8 @@ export default function App() {
   }
 
   async function handleDelete(reminder: Reminder) {
+    await cancelNotification(reminder.notificationId);
+    await cancelNotification(reminder.repeatingNotificationId);
     await deleteReminder(reminder.id);
     await loadReminders();
   }
@@ -104,6 +142,13 @@ export default function App() {
     );
   }
 
+  const now = new Date();
+  const sortedReminders = [...reminders].sort((a, b) => {
+    const aNext = computeNextDueDate(new Date(a.startDate), a.intervalDays, now).getTime();
+    const bNext = computeNextDueDate(new Date(b.startDate), b.intervalDays, now).getTime();
+    return aNext - bNext;
+  });
+
   return (
     <View style={styles.container}>
       <StatusBar style="auto" />
@@ -111,25 +156,28 @@ export default function App() {
 
       <FlatList
         style={styles.list}
-        data={reminders}
+        data={sortedReminders}
         keyExtractor={(item) => String(item.id)}
         ListEmptyComponent={
           <Text style={styles.empty}>No reminders yet. Tap + to add one.</Text>
         }
-        renderItem={({ item }) => (
-          <View style={styles.row}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>{item.title}</Text>
-              <Text style={styles.rowSubtitle}>
-                Every {item.intervalDays} day{item.intervalDays === 1 ? '' : 's'} · next{' '}
-                {formatDate(item.nextDueDate)}
-              </Text>
+        renderItem={({ item }) => {
+          const nextDue = computeNextDueDate(new Date(item.startDate), item.intervalDays, now);
+          return (
+            <View style={styles.row}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rowTitle}>{item.title}</Text>
+                <Text style={styles.rowSubtitle}>
+                  Every {item.intervalDays} day{item.intervalDays === 1 ? '' : 's'} · next{' '}
+                  {formatDateTime(nextDue)}
+                </Text>
+              </View>
+              <Pressable onPress={() => handleDelete(item)} hitSlop={12}>
+                <Text style={styles.deleteText}>Delete</Text>
+              </Pressable>
             </View>
-            <Pressable onPress={() => handleDelete(item)} hitSlop={12}>
-              <Text style={styles.deleteText}>Delete</Text>
-            </Pressable>
-          </View>
-        )}
+          );
+        }}
       />
 
       <Pressable style={styles.fab} onPress={() => setModalVisible(true)}>
@@ -137,8 +185,11 @@ export default function App() {
       </Pressable>
 
       <Modal visible={modalVisible} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <View style={[styles.modalCard, { paddingBottom: insets.bottom + 20 }]}>
             <Text style={styles.modalHeader}>New Reminder</Text>
 
             <Text style={styles.label}>Title</Text>
@@ -166,6 +217,23 @@ export default function App() {
               />
             )}
 
+            <Text style={styles.label}>Notification time</Text>
+            <Pressable style={styles.input} onPress={() => setShowTimePicker(true)}>
+              <Text>{formatTime(notificationTime)}</Text>
+            </Pressable>
+            {showTimePicker && (
+              <DateTimePicker
+                value={notificationTime}
+                mode="time"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onValueChange={(_event, selected) => {
+                  setShowTimePicker(Platform.OS === 'ios');
+                  setNotificationTime(selected);
+                }}
+                onDismiss={() => setShowTimePicker(false)}
+              />
+            )}
+
             <Text style={styles.label}>Repeat every (days)</Text>
             <TextInput
               style={styles.input}
@@ -189,7 +257,7 @@ export default function App() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -265,7 +333,6 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     padding: 20,
-    paddingBottom: 36,
   },
   modalHeader: {
     fontSize: 20,

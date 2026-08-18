@@ -3,60 +3,53 @@ import * as SQLite from 'expo-sqlite';
 export type Reminder = {
   id: number;
   title: string;
-  startDate: string; // ISO date string, date-only
+  startDate: string; // ISO datetime — the chosen starting day combined with the chosen notification time
   intervalDays: number;
-  nextDueDate: string; // ISO date string, date-only
-  notificationId: string | null;
+  notificationId: string | null; // one-shot notification for the first occurrence
+  repeatingNotificationId: string | null; // native repeating notification for every occurrence after that
 };
 
 const db = SQLite.openDatabaseSync('reminders.db');
 
 export async function initDb() {
+  const columns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(reminders)');
+  const hasCurrentSchema = columns.some((c) => c.name === 'repeatingNotificationId');
+  if (columns.length > 0 && !hasCurrentSchema) {
+    await db.execAsync('DROP TABLE reminders');
+  }
+
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS reminders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT NOT NULL,
       startDate TEXT NOT NULL,
       intervalDays INTEGER NOT NULL,
-      nextDueDate TEXT NOT NULL,
-      notificationId TEXT
+      notificationId TEXT,
+      repeatingNotificationId TEXT
     );
   `);
 }
 
 export async function getReminders(): Promise<Reminder[]> {
-  return db.getAllAsync<Reminder>('SELECT * FROM reminders ORDER BY nextDueDate ASC');
+  return db.getAllAsync<Reminder>('SELECT * FROM reminders ORDER BY id ASC');
 }
 
 export async function insertReminder(
   title: string,
   startDate: string,
   intervalDays: number,
-  nextDueDate: string,
-  notificationId: string | null
+  notificationId: string | null,
+  repeatingNotificationId: string | null
 ): Promise<number> {
   const result = await db.runAsync(
-    'INSERT INTO reminders (title, startDate, intervalDays, nextDueDate, notificationId) VALUES (?, ?, ?, ?, ?)',
+    'INSERT INTO reminders (title, startDate, intervalDays, notificationId, repeatingNotificationId) VALUES (?, ?, ?, ?, ?)',
     title,
     startDate,
     intervalDays,
-    nextDueDate,
-    notificationId
+    notificationId,
+    repeatingNotificationId
   );
   return result.lastInsertRowId;
-}
-
-export async function updateReminderSchedule(
-  id: number,
-  nextDueDate: string,
-  notificationId: string | null
-) {
-  await db.runAsync(
-    'UPDATE reminders SET nextDueDate = ?, notificationId = ? WHERE id = ?',
-    nextDueDate,
-    notificationId,
-    id
-  );
 }
 
 export async function deleteReminder(id: number) {

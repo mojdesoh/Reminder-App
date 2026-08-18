@@ -1,6 +1,5 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
-import { Reminder, updateReminderSchedule } from './db';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -30,7 +29,7 @@ export function computeNextDueDate(startDate: Date, intervalDays: number, now: D
   return new Date(startDate.getTime() + intervalsPassed * intervalDays * MS_PER_DAY);
 }
 
-export async function scheduleOneShot(title: string, dueDate: Date): Promise<string> {
+async function scheduleOneShot(title: string, dueDate: Date): Promise<string> {
   const seconds = Math.max(1, Math.round((dueDate.getTime() - Date.now()) / 1000));
   return Notifications.scheduleNotificationAsync({
     content: { title, body: "It's time!" },
@@ -41,26 +40,36 @@ export async function scheduleOneShot(title: string, dueDate: Date): Promise<str
   });
 }
 
+// A native, OS-managed repeating trigger: once scheduled, the OS keeps firing
+// it every intervalDays with no app code involved, so delivery doesn't depend
+// on the app ever being reopened.
+async function scheduleRepeating(title: string, intervalDays: number): Promise<string> {
+  return Notifications.scheduleNotificationAsync({
+    content: { title, body: "It's time!" },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+      seconds: intervalDays * 24 * 60 * 60,
+      repeats: true,
+    },
+  });
+}
+
+// Schedules a precise one-shot for the very next due date (so it lands exactly
+// on the chosen start day/time), plus a native repeating trigger that covers
+// every occurrence after that indefinitely.
+export async function scheduleReminderNotifications(
+  title: string,
+  firstDueDate: Date,
+  intervalDays: number
+): Promise<{ notificationId: string; repeatingNotificationId: string }> {
+  const notificationId = await scheduleOneShot(title, firstDueDate);
+  const repeatingNotificationId = await scheduleRepeating(title, intervalDays);
+  return { notificationId, repeatingNotificationId };
+}
+
 export async function cancelNotification(notificationId: string | null) {
   if (!notificationId) return;
   await Notifications.cancelScheduledNotificationAsync(notificationId).catch(() => {});
-}
-
-// Call on app launch/foreground: catches up any reminder whose due date has
-// passed while the app wasn't running, and rolls it forward to the next one.
-export async function resyncReminder(reminder: Reminder, now: Date) {
-  const dueDate = new Date(reminder.nextDueDate);
-  if (dueDate.getTime() > now.getTime()) return;
-
-  const nextDueDate = computeNextDueDate(
-    new Date(dueDate.getTime() + 1),
-    reminder.intervalDays,
-    now
-  );
-
-  await cancelNotification(reminder.notificationId);
-  const notificationId = await scheduleOneShot(reminder.title, nextDueDate);
-  await updateReminderSchedule(reminder.id, nextDueDate.toISOString(), notificationId);
 }
 
 export function androidChannelSetup() {

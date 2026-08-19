@@ -12,12 +12,20 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { Ionicons } from '@expo/vector-icons';
 import {
   SafeAreaProvider,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
 
-import { Reminder, deleteReminder, getReminders, initDb, insertReminder } from './lib/db';
+import {
+  Reminder,
+  deleteReminder,
+  getReminders,
+  initDb,
+  insertReminder,
+  updateReminder,
+} from './lib/db';
 import {
   androidChannelSetup,
   cancelNotification,
@@ -72,6 +80,7 @@ function ReminderApp() {
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [ready, setReady] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
 
   const [title, setTitle] = useState('');
   const [startDate, setStartDate] = useState(startOfDay(new Date()));
@@ -101,28 +110,66 @@ function ReminderApp() {
     setIntervalDays('7');
   }
 
-  async function handleAddReminder() {
+  function openAddModal() {
+    resetForm();
+    setEditingId(null);
+    setModalVisible(true);
+  }
+
+  function openEditModal(reminder: Reminder) {
+    const anchor = new Date(reminder.startDate);
+    setTitle(reminder.title);
+    setStartDate(startOfDay(anchor));
+    setNotificationTime(anchor);
+    setIntervalDays(String(reminder.intervalDays));
+    setEditingId(reminder.id);
+    setModalVisible(true);
+  }
+
+  async function handleSubmit() {
     const interval = parseInt(intervalDays, 10);
     if (!title.trim() || !Number.isFinite(interval) || interval < 1) return;
 
     const anchor = combineDateAndTime(startDate, notificationTime);
     const now = new Date();
     const firstDueDate = computeNextDueDate(anchor, interval, now);
-    const { notificationId, repeatingNotificationId } = await scheduleReminderNotifications(
-      title.trim(),
-      firstDueDate,
-      interval
-    );
 
-    await insertReminder(
-      title.trim(),
-      anchor.toISOString(),
-      interval,
-      notificationId,
-      repeatingNotificationId
-    );
+    if (editingId !== null) {
+      const existing = reminders.find((r) => r.id === editingId);
+      if (existing) {
+        await cancelNotification(existing.notificationId);
+        await cancelNotification(existing.repeatingNotificationId);
+      }
+      const { notificationId, repeatingNotificationId } = await scheduleReminderNotifications(
+        title.trim(),
+        firstDueDate,
+        interval
+      );
+      await updateReminder(
+        editingId,
+        title.trim(),
+        anchor.toISOString(),
+        interval,
+        notificationId,
+        repeatingNotificationId
+      );
+    } else {
+      const { notificationId, repeatingNotificationId } = await scheduleReminderNotifications(
+        title.trim(),
+        firstDueDate,
+        interval
+      );
+      await insertReminder(
+        title.trim(),
+        anchor.toISOString(),
+        interval,
+        notificationId,
+        repeatingNotificationId
+      );
+    }
 
     resetForm();
+    setEditingId(null);
     setModalVisible(false);
     await loadReminders();
   }
@@ -172,25 +219,34 @@ function ReminderApp() {
                   {formatDateTime(nextDue)}
                 </Text>
               </View>
-              <Pressable onPress={() => handleDelete(item)} hitSlop={12}>
-                <Text style={styles.deleteText}>Delete</Text>
+              <Pressable
+                onPress={() => openEditModal(item)}
+                hitSlop={12}
+                style={styles.iconButton}
+              >
+                <Ionicons name="pencil-outline" size={20} color="#2f6fed" />
+              </Pressable>
+              <Pressable onPress={() => handleDelete(item)} hitSlop={12} style={styles.iconButton}>
+                <Ionicons name="trash-outline" size={20} color="#d33" />
               </Pressable>
             </View>
           );
         }}
       />
 
-      <Pressable style={styles.fab} onPress={() => setModalVisible(true)}>
+      <Pressable style={styles.fab} onPress={openAddModal}>
         <Text style={styles.fabText}>+</Text>
       </Pressable>
 
       <Modal visible={modalVisible} animationType="slide" transparent>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={styles.modalOverlay}
         >
           <View style={[styles.modalCard, { paddingBottom: insets.bottom + 20 }]}>
-            <Text style={styles.modalHeader}>New Reminder</Text>
+            <Text style={styles.modalHeader}>
+              {editingId !== null ? 'Edit Reminder' : 'New Reminder'}
+            </Text>
 
             <Text style={styles.label}>Title</Text>
             <TextInput
@@ -247,13 +303,16 @@ function ReminderApp() {
                 style={styles.secondaryButton}
                 onPress={() => {
                   resetForm();
+                  setEditingId(null);
                   setModalVisible(false);
                 }}
               >
-                <Text>Cancel</Text>
+                <Text>{editingId !== null ? 'Discard' : 'Cancel'}</Text>
               </Pressable>
-              <Pressable style={styles.primaryButton} onPress={handleAddReminder}>
-                <Text style={styles.primaryButtonText}>Save</Text>
+              <Pressable style={styles.primaryButton} onPress={handleSubmit}>
+                <Text style={styles.primaryButtonText}>
+                  {editingId !== null ? 'Submit' : 'Save'}
+                </Text>
               </Pressable>
             </View>
           </View>
@@ -299,8 +358,9 @@ const styles = StyleSheet.create({
     color: '#666',
     marginTop: 2,
   },
-  deleteText: {
-    color: '#d33',
+  iconButton: {
+    paddingHorizontal: 8,
+    paddingVertical: 8,
   },
   fab: {
     position: 'absolute',

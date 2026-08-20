@@ -52,6 +52,25 @@ export async function insertReminder(
   return result.lastInsertRowId;
 }
 
+export async function updateReminder(
+  id: number,
+  title: string,
+  startDate: string,
+  intervalDays: number,
+  notificationId: string | null,
+  repeatingNotificationId: string | null
+) {
+  await db.runAsync(
+    'UPDATE reminders SET title = ?, startDate = ?, intervalDays = ?, notificationId = ?, repeatingNotificationId = ? WHERE id = ?',
+    title,
+    startDate,
+    intervalDays,
+    notificationId,
+    repeatingNotificationId,
+    id
+  );
+}
+
 export async function deleteReminder(id: number) {
   await db.runAsync('DELETE FROM reminders WHERE id = ?', id);
 }

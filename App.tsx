@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
+  Alert,
   FlatList,
   KeyboardAvoidingView,
   Modal,
@@ -174,11 +175,24 @@ function ReminderApp() {
     await loadReminders();
   }
 
-  async function handleDelete(reminder: Reminder) {
-    await cancelNotification(reminder.notificationId);
-    await cancelNotification(reminder.repeatingNotificationId);
-    await deleteReminder(reminder.id);
-    await loadReminders();
+  function handleDelete(reminder: Reminder) {
+    Alert.alert(
+      'Are you sure to delete this reminder?',
+      undefined,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            await cancelNotification(reminder.notificationId);
+            await cancelNotification(reminder.repeatingNotificationId);
+            await deleteReminder(reminder.id);
+            await loadReminders();
+          },
+        },
+      ]
+    );
   }
 
   if (!ready) {

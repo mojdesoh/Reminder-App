@@ -7,6 +7,7 @@ import {
   Platform,
   Pressable,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -68,6 +69,13 @@ function formatTime(date: Date): string {
   return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
 
+function getDueDate(reminder: Reminder, now: Date): Date {
+  const anchor = new Date(reminder.startDate);
+  return reminder.repeats
+    ? computeNextDueDate(anchor, reminder.intervalDays, now)
+    : anchor;
+}
+
 export default function App() {
   return (
     <SafeAreaProvider>
@@ -89,6 +97,7 @@ function ReminderApp() {
   const [notificationTime, setNotificationTime] = useState(defaultNotificationTime());
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [intervalDays, setIntervalDays] = useState('7');
+  const [repeats, setRepeats] = useState(true);
 
   const loadReminders = useCallback(async () => {
     setReminders(await getReminders());
@@ -109,6 +118,7 @@ function ReminderApp() {
     setStartDate(startOfDay(new Date()));
     setNotificationTime(defaultNotificationTime());
     setIntervalDays('7');
+    setRepeats(true);
   }
 
   function openAddModal() {
@@ -123,17 +133,19 @@ function ReminderApp() {
     setStartDate(startOfDay(anchor));
     setNotificationTime(anchor);
     setIntervalDays(String(reminder.intervalDays));
+    setRepeats(!!reminder.repeats);
     setEditingId(reminder.id);
     setModalVisible(true);
   }
 
   async function handleSubmit() {
-    const interval = parseInt(intervalDays, 10);
-    if (!title.trim() || !Number.isFinite(interval) || interval < 1) return;
+    const parsedInterval = parseInt(intervalDays, 10);
+    const interval = repeats ? parsedInterval : Number.isFinite(parsedInterval) ? parsedInterval : 1;
+    if (!title.trim() || (repeats && (!Number.isFinite(interval) || interval < 1))) return;
 
     const anchor = combineDateAndTime(startDate, notificationTime);
     const now = new Date();
-    const firstDueDate = computeNextDueDate(anchor, interval, now);
+    const firstDueDate = repeats ? computeNextDueDate(anchor, interval, now) : anchor;
 
     if (editingId !== null) {
       const existing = reminders.find((r) => r.id === editingId);
@@ -144,13 +156,15 @@ function ReminderApp() {
       const { notificationId, repeatingNotificationId } = await scheduleReminderNotifications(
         title.trim(),
         firstDueDate,
-        interval
+        interval,
+        repeats
       );
       await updateReminder(
         editingId,
         title.trim(),
         anchor.toISOString(),
         interval,
+        repeats,
         notificationId,
         repeatingNotificationId
       );
@@ -158,12 +172,14 @@ function ReminderApp() {
       const { notificationId, repeatingNotificationId } = await scheduleReminderNotifications(
         title.trim(),
         firstDueDate,
-        interval
+        interval,
+        repeats
       );
       await insertReminder(
         title.trim(),
         anchor.toISOString(),
         interval,
+        repeats,
         notificationId,
         repeatingNotificationId
       );
@@ -205,9 +221,7 @@ function ReminderApp() {
 
   const now = new Date();
   const sortedReminders = [...reminders].sort((a, b) => {
-    const aNext = computeNextDueDate(new Date(a.startDate), a.intervalDays, now).getTime();
-    const bNext = computeNextDueDate(new Date(b.startDate), b.intervalDays, now).getTime();
-    return aNext - bNext;
+    return getDueDate(a, now).getTime() - getDueDate(b, now).getTime();
   });
 
   return (
@@ -223,14 +237,16 @@ function ReminderApp() {
           <Text style={styles.empty}>No reminders yet. Tap + to add one.</Text>
         }
         renderItem={({ item }) => {
-          const nextDue = computeNextDueDate(new Date(item.startDate), item.intervalDays, now);
+          const dueDate = getDueDate(item, now);
           return (
             <View style={styles.row}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.rowTitle}>{item.title}</Text>
                 <Text style={styles.rowSubtitle}>
-                  Every {item.intervalDays} day{item.intervalDays === 1 ? '' : 's'} · next{' '}
-                  {formatDateTime(nextDue)}
+                  {item.repeats
+                    ? `Every ${item.intervalDays} day${item.intervalDays === 1 ? '' : 's'} · next `
+                    : 'Once · '}
+                  {formatDateTime(dueDate)}
                 </Text>
               </View>
               <Pressable
@@ -304,12 +320,19 @@ function ReminderApp() {
               />
             )}
 
-            <Text style={styles.label}>Repeat every (days)</Text>
+            <View style={styles.repeatHeaderRow}>
+              <Text style={styles.label}>Repeat every (days)</Text>
+              <View style={styles.happensOnceRow}>
+                <Text style={styles.happensOnceLabel}>Happens once</Text>
+                <Switch value={!repeats} onValueChange={(value) => setRepeats(!value)} />
+              </View>
+            </View>
             <TextInput
-              style={styles.input}
+              style={[styles.input, !repeats && styles.inputDisabled]}
               value={intervalDays}
               onChangeText={setIntervalDays}
               keyboardType="number-pad"
+              editable={repeats}
             />
 
             <View style={styles.modalActions}>
@@ -425,6 +448,24 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
+  },
+  inputDisabled: {
+    opacity: 0.4,
+  },
+  repeatHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 12,
+  },
+  happensOnceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  happensOnceLabel: {
+    fontSize: 13,
+    color: '#666',
   },
   modalActions: {
     flexDirection: 'row',

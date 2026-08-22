@@ -55,15 +55,16 @@ async function scheduleRepeating(title: string, intervalDays: number): Promise<s
 }
 
 // Schedules a precise one-shot for the very next due date (so it lands exactly
-// on the chosen start day/time), plus a native repeating trigger that covers
-// every occurrence after that indefinitely.
+// on the chosen start day/time), plus — unless the reminder only happens once —
+// a native repeating trigger that covers every occurrence after that indefinitely.
 export async function scheduleReminderNotifications(
   title: string,
   firstDueDate: Date,
-  intervalDays: number
-): Promise<{ notificationId: string; repeatingNotificationId: string }> {
+  intervalDays: number,
+  repeats: boolean
+): Promise<{ notificationId: string; repeatingNotificationId: string | null }> {
   const notificationId = await scheduleOneShot(title, firstDueDate);
-  const repeatingNotificationId = await scheduleRepeating(title, intervalDays);
+  const repeatingNotificationId = repeats ? await scheduleRepeating(title, intervalDays) : null;
   return { notificationId, repeatingNotificationId };
 }
 
